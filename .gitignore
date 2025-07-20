@@ -1,0 +1,46 @@
+# Environment files - NEVER COMMIT THESE
+.env
+.env.*
+.env.local
+.env.production
+.env.development
+
+# Private keys - CRITICAL SECURITY
+*.key
+*_private_key*
+*_PRIVATE_KEY*
+wallet.json
+keystore/
+
+# Build artifacts
+/target
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+*.orig
+*.rej
+
+# Coverage
+tarpaulin-report.html
+cobertura.xml
+
+# Temporary files
+*.tmp
+tmp/
+temp/

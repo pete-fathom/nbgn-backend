@@ -1,0 +1,708 @@
+openapi: 3.0.0
+info:
+  title: NBGN Voucher Backend API
+  description: Backend API for NBGN voucher system on Arbitrum One
+  version: 1.0.0
+  contact:
+    name: Molly (Backend Engineer)
+    email: molly@nbgn.io
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.nbgn.io
+    description: Production server
+tags:
+  - name: Vouchers
+    description: Voucher creation, verification, and claiming
+  - name: Users
+    description: User profile and transaction management
+  - name: Analytics
+    description: Platform analytics and statistics
+  - name: Contract
+    description: On-chain contract data
+
+paths:
+  /api/vouchers/link:
+    post:
+      tags: [Vouchers]
+      summary: Generate shareable link for on-chain voucher
+      description: Creates a shareable code for an existing on-chain voucher with optional password protection
+      operationId: createVoucherLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - voucher_id
+              properties:
+                voucher_id:
+                  type: string
+                  pattern: '^0x[a-fA-F0-9]{64}$'
+                  description: The bytes32 voucher ID from blockchain
+                  example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                password:
+                  type: string
+                  description: Optional password for additional security
+                  example: "SecurePass123!"
+      responses:
+        '200':
+          description: Successfully created voucher link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  code:
+                    type: string
+                    description: 16-character alphanumeric voucher code
+                    example: "ABCD1234EFGH5678"
+                  link:
+                    type: string
+                    description: Relative URL for claiming
+                    example: "/claim/ABCD1234EFGH5678"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+
+  /api/vouchers/verify:
+    post:
+      tags: [Vouchers]
+      summary: Verify voucher validity
+      description: Checks if a voucher code is valid and claimable. Rate limited to 5 attempts per code per IP per hour.
+      operationId: verifyVoucher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                  description: 16-character voucher code
+                  example: "ABCD1234EFGH5678"
+                password:
+                  type: string
+                  description: Password if voucher is password-protected
+      responses:
+        '200':
+          description: Voucher verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  voucher_id:
+                    type: string
+                    example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                  amount:
+                    type: string
+                    description: Amount in wei
+                    example: "1000000000000000000"
+                  creator:
+                    type: string
+                    example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+                  created_at:
+                    type: string
+                    format: date-time
+        '400':
+          description: Voucher already claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Voucher already claimed"
+                  claimed_by:
+                    type: string
+                    example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+                  claimed_at:
+                    type: string
+                    format: date-time
+        '401':
+          description: Invalid password
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid password"
+        '404':
+          description: Voucher not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Voucher not found"
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+
+  /api/vouchers/claim:
+    post:
+      tags: [Vouchers]
+      summary: Generate claim authorization
+      description: |
+        Generates a signature for claiming a voucher. The frontend will use this signature
+        to submit the claim transaction on-chain. Rate limited to 10 attempts per IP per hour.
+      operationId: claimVoucher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+                - recipient_address
+              properties:
+                code:
+                  type: string
+                  description: 16-character voucher code
+                  example: "ABCD1234EFGH5678"
+                password:
+                  type: string
+                  description: Password if voucher is password-protected
+                recipient_address:
+                  type: string
+                  pattern: '^0x[a-fA-F0-9]{40}$'
+                  description: Ethereum address to receive the voucher
+                  example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+      responses:
+        '200':
+          description: Claim authorization with signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimAuthorization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+
+  /api/vouchers/claim-status:
+    post:
+      tags: [Vouchers]
+      summary: Update claim status
+      description: Updates the database after a claim transaction is submitted on-chain
+      operationId: updateClaimStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+                - tx_hash
+                - success
+              properties:
+                code:
+                  type: string
+                  description: 16-character voucher code
+                  example: "ABCD1234EFGH5678"
+                tx_hash:
+                  type: string
+                  pattern: '^0x[a-fA-F0-9]{64}$'
+                  description: Transaction hash from blockchain
+                  example: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                success:
+                  type: boolean
+                  description: Whether the claim transaction succeeded
+                  example: true
+      responses:
+        '200':
+          description: Status update successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Voucher claimed successfully"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Voucher not found
+
+  /api/vouchers/user/{address}:
+    get:
+      tags: [Vouchers]
+      summary: List user vouchers
+      description: Get paginated list of vouchers created or received by a user
+      operationId: listUserVouchers
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+          description: Ethereum address
+          example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [created, received]
+            default: created
+          description: Filter by voucher type
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Page number (0-indexed)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page
+      responses:
+        '200':
+          description: List of vouchers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vouchers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VoucherCode'
+                  page:
+                    type: integer
+                    example: 0
+                  limit:
+                    type: integer
+                    example: 20
+                  type:
+                    type: string
+                    example: "created"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/users/{address}:
+    get:
+      tags: [Users]
+      summary: Get user profile
+      description: Retrieve user profile with transaction statistics
+      operationId: getUserProfile
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+          description: Ethereum address
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '404':
+          description: User not found
+
+  /api/users/username:
+    post:
+      tags: [Users]
+      summary: Set username
+      description: Set or update username with signature verification. Rate limited to 5 per hour.
+      operationId: setUsername
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetUsernameRequest'
+      responses:
+        '200':
+          description: Username set successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '400':
+          description: Username already taken
+        '401':
+          description: Invalid signature
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+
+  /api/transactions/{address}:
+    get:
+      tags: [Users]
+      summary: Get user transactions
+      description: Get paginated list of user's NBGN transactions
+      operationId: getUserTransactions
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Transaction list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+                  total:
+                    type: integer
+                    example: 42
+                  limit:
+                    type: integer
+                    example: 50
+                  offset:
+                    type: integer
+                    example: 0
+
+  /api/transactions/recent:
+    get:
+      tags: [Users]
+      summary: Get recent transactions
+      description: Get recent NBGN transactions across all users
+      operationId: getRecentTransactions
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Recent transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Transaction'
+
+  /api/analytics/overview:
+    get:
+      tags: [Analytics]
+      summary: Get analytics overview
+      description: Platform-wide analytics including 24h volume and user stats
+      operationId: getAnalytics
+      responses:
+        '200':
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_volume_24h:
+                    type: string
+                    example: "1234567890000000000000"
+                  unique_users_24h:
+                    type: integer
+                    example: 156
+                  total_transactions:
+                    type: integer
+                    example: 4321
+                  average_transaction_size:
+                    type: string
+                    example: "987654321000000000"
+
+  /api/contract/reserve-ratio:
+    get:
+      tags: [Contract]
+      summary: Get reserve ratio
+      description: Get current NBGN reserve ratio from contract (cached for 1 minute)
+      operationId: getReserveRatio
+      responses:
+        '200':
+          description: Reserve ratio data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reserve_ratio:
+                    type: string
+                    example: "0.7500"
+                  total_supply:
+                    type: string
+                    example: "1000000000000000000000000"
+                  reserves:
+                    type: string
+                    example: "750000000000000000000000"
+
+components:
+  schemas:
+    ClaimAuthorization:
+      type: object
+      properties:
+        voucher_id:
+          type: string
+          description: The bytes32 voucher ID
+          example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+        recipient:
+          type: string
+          description: Recipient address
+          example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+        amount:
+          type: string
+          description: Amount in wei
+          example: "1000000000000000000"
+        deadline:
+          type: integer
+          format: int64
+          description: Unix timestamp deadline
+          example: 1710123456
+        signature:
+          type: string
+          description: Backend signature for claiming
+          example: "0xabcdef..."
+        contract_address:
+          type: string
+          description: Voucher contract address
+          example: "0x66Eb0Aa46827e5F3fFcb6Dea23C309CB401690B6"
+
+    VoucherCode:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "ABCD1234EFGH5678"
+        voucher_id:
+          type: string
+          example: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+        password_hash:
+          type: string
+          nullable: true
+          description: Argon2 hash if password-protected
+        created_at:
+          type: string
+          format: date-time
+        creator_address:
+          type: string
+          nullable: true
+          example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+        amount:
+          type: string
+          nullable: true
+          example: "1000000000000000000"
+        on_chain_created_at:
+          type: string
+          format: date-time
+          nullable: true
+        claimed:
+          type: boolean
+          example: false
+        claimed_by:
+          type: string
+          nullable: true
+          example: "0x123..."
+        claimed_at:
+          type: string
+          format: date-time
+          nullable: true
+        claim_tx_hash:
+          type: string
+          nullable: true
+          example: "0xdef..."
+
+    UserProfile:
+      type: object
+      properties:
+        address:
+          type: string
+          example: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD7E"
+        username:
+          type: string
+          nullable: true
+          example: "alice.eth"
+        created_at:
+          type: string
+          format: date-time
+        total_minted:
+          type: string
+          example: "1000000000000000000000"
+        total_redeemed:
+          type: string
+          example: "500000000000000000000"
+        total_burned:
+          type: string
+          example: "100000000000000000000"
+        transaction_count:
+          type: integer
+          example: 42
+
+    SetUsernameRequest:
+      type: object
+      required:
+        - address
+        - username
+        - message
+        - signature
+      properties:
+        address:
+          type: string
+          pattern: '^0x[a-fA-F0-9]{40}$'
+        username:
+          type: string
+          minLength: 3
+          maxLength: 20
+        message:
+          type: string
+          description: Message that was signed
+        signature:
+          type: string
+          description: Ethereum signature
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        tx_hash:
+          type: string
+        block_number:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        user_address:
+          type: string
+        transaction_type:
+          type: string
+          enum: [mint, redeem, burn]
+        eure_amount:
+          type: string
+          nullable: true
+        nbgn_amount:
+          type: string
+        gas_used:
+          type: string
+          nullable: true
+        gas_price:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Invalid request"
+              message:
+                type: string
+                example: "Detailed error message"
+
+    RateLimitExceeded:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: Request limit per window
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+          description: Remaining requests in window
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+          description: Unix timestamp when window resets
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until next request allowed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Too Many Requests"
+              message:
+                type: string
+                example: "Rate limit exceeded. Maximum 10 requests per 3600 seconds allowed."
+              retry_after:
+                type: integer
+                example: 2547
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Optional API key for higher rate limits
+
+security:
+  - {}  # Most endpoints don't require auth
+  - ApiKeyAuth: []  # Optional for higher rate limits

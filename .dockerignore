@@ -1,0 +1,12 @@
+target/
+.env
+.env.local
+*.log
+.git/
+.gitignore
+.DS_Store
+Dockerfile
+.dockerignore
+RUN_GUIDE.md
+API_EXAMPLES.md
+scripts/
